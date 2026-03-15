@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Evolve — Network</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #050b18;
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+  }
+  canvas {
+    display: block;
+    position: fixed;
+    top: 0; left: 0;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+
+// ── BRAND COLORS ─────────────────────────────────────────────────────────────
+const COL = {
+  bg:           '#050b18',
+  chrome:       { r:200, g:216, b:232 },  // #c8d8e8 — primary, most common
+  electric:     { r: 74, g:144, b:217 },  // #4a90d9 — secondary
+  electricHi:   { r: 91, g:163, b:238 },  // #5ba3ee — accent variation
+  white:        { r:244, g:248, b:252 },  // #f4f8fc — occasional bright
+  amber:        { r:245, g:166, b: 35 },  // #f5a623 — rare accent
+};
+
+// ── SETUP ─────────────────────────────────────────────────────────────────────
+let W, H;
+function resize() {
+  W = canvas.width  = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', () => { resize(); initParticles(); });
+
+// ── PARTICLE CONFIG ───────────────────────────────────────────────────────────
+const N          = 110;        // total particles
+const CONNECT_D  = 160;        // max px distance to draw a line
+const SPEED_BASE = 0.28;       // base movement speed
+const LOOP_SECS  = 120;        // seamless loop duration — doubled = half speed
+const CURSOR_R   = 90;         // cursor influence radius in px
+
+// Color distribution: chrome ~65%, electric ~25%, white ~7%, amber ~3%
+function assignColor(i) {
+  const r = Math.random();
+  if      (r < 0.65) return 'chrome';
+  else if (r < 0.90) return 'electric';
+  else if (r < 0.97) return 'white';
+  else               return 'amber';
+}
+
+function colorRGB(name) {
+  return COL[name] || COL.chrome;
+}
+
+// ── PARTICLE CLASS ────────────────────────────────────────────────────────────
+class Particle {
+  constructor(i) {
+    this.i    = i;
+    this.col  = assignColor(i);
+    this.c    = colorRGB(this.col);
+
+    // Size: chrome/electric small-medium, white slightly larger, amber medium
+    this.baseR = this.col === 'white'  ? 1.8 + Math.random() * 1.0
+               : this.col === 'amber' ? 1.4 + Math.random() * 0.8
+               :                        1.0 + Math.random() * 1.2;
+
+    // Seamless loop: each particle travels a closed Lissajous-like path
+    // Position = center + A*sin(freq_x * t + phase_x), B*cos(freq_y * t + phase_y)
+    // This guarantees perfect looping with period LOOP_SECS
+    const margin = 0.12;
+    this.cx   = W * (margin + Math.random() * (1 - 2*margin));
+    this.cy   = H * (margin + Math.random() * (1 - 2*margin));
+
+    // Amplitude: how far it wanders
+    this.ax = W * (0.04 + Math.random() * 0.14);
+    this.ay = H * (0.04 + Math.random() * 0.14);
+
+    // Frequency: small integer ratios → closed Lissajous curves
+    const freqChoices = [1, 1, 1, 2, 2, 3];
+    this.fx = freqChoices[Math.floor(Math.random() * freqChoices.length)];
+    this.fy = freqChoices[Math.floor(Math.random() * freqChoices.length)];
+
+    // Phase offsets — random start position on the curve
+    this.px = Math.random() * Math.PI * 2;
+    this.py = Math.random() * Math.PI * 2;
+
+    // Twinkle
+    this.twinklePhase = Math.random() * Math.PI * 2;
+    this.twinkleFreq  = 0.008 + Math.random() * 0.012;
+
+    // Initial position
+    this.x = this.cx;
+    this.y = this.cy;
+  }
+
+  update(t) {
+    // t = time in seconds, loops perfectly every LOOP_SECS
+    const tau = (t / LOOP_SECS) * Math.PI * 2;
+    this.x = this.cx + this.ax * Math.sin(this.fx * tau + this.px);
+    this.y = this.cy + this.ay * Math.cos(this.fy * tau + this.py);
+  }
+
+  draw(frame) {
+    const twinkle = 0.75 + 0.25 * Math.sin(this.twinklePhase + frame * this.twinkleFreq);
+
+    // Cursor proximity: 0 = far, 1 = right on top
+    const dx      = this.x - mouse.x;
+    const dy      = this.y - mouse.y;
+    const dist    = Math.sqrt(dx*dx + dy*dy);
+    const hover   = dist < CURSOR_R ? Math.pow(1 - dist / CURSOR_R, 1.8) : 0;
+
+    // Boost alpha and size when cursor is near
+    const alpha   = Math.min(1, twinkle + hover * 0.65);
+    const r       = this.baseR * (0.9 + 0.1 * twinkle + hover * 0.9);
+    const c       = this.c;
+
+    // Hover: extra outer bloom ring
+    if (hover > 0.05) {
+      const bloomR = r * (8 + hover * 6);
+      const bloom  = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, bloomR);
+      bloom.addColorStop(0,   `rgba(${c.r},${c.g},${c.b},${hover * 0.18})`);
+      bloom.addColorStop(0.3, `rgba(${c.r},${c.g},${c.b},${hover * 0.07})`);
+      bloom.addColorStop(1,   `rgba(${c.r},${c.g},${c.b},0)`);
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, bloomR, 0, Math.PI * 2);
+      ctx.fillStyle = bloom;
+      ctx.fill();
+    }
+
+    // Outer soft glow
+    const glowR = r * 4.5;
+    const glow  = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, glowR);
+    glow.addColorStop(0,   `rgba(${c.r},${c.g},${c.b},${alpha * 0.20})`);
+    glow.addColorStop(0.4, `rgba(${c.r},${c.g},${c.b},${alpha * 0.07})`);
+    glow.addColorStop(1,   `rgba(${c.r},${c.g},${c.b},0)`);
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, glowR, 0, Math.PI * 2);
+    ctx.fillStyle = glow;
+    ctx.fill();
+
+    // Core dot
+    const dot = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, r * 1.6);
+    dot.addColorStop(0,   `rgba(${c.r},${c.g},${c.b},${alpha})`);
+    dot.addColorStop(0.6, `rgba(${c.r},${c.g},${c.b},${alpha * 0.7})`);
+    dot.addColorStop(1,   `rgba(${c.r},${c.g},${c.b},0)`);
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, r * 1.6, 0, Math.PI * 2);
+    ctx.fillStyle = dot;
+    ctx.fill();
+
+    // Hard bright center — extra white-hot when hovered
+    const coreAlpha = Math.min(1, alpha * 0.95 + hover * 0.8);
+    const coreR     = r * (0.55 + hover * 0.4);
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, coreR, 0, Math.PI * 2);
+    // Blend toward white on hover
+    const wr = Math.round(c.r + (244 - c.r) * hover * 0.7);
+    const wg = Math.round(c.g + (248 - c.g) * hover * 0.7);
+    const wb = Math.round(c.b + (252 - c.b) * hover * 0.7);
+    ctx.fillStyle = `rgba(${wr},${wg},${wb},${coreAlpha})`;
+    ctx.fill();
+  }
+}
+
+// ── MOUSE ─────────────────────────────────────────────────────────────────────
+const mouse = { x: -9999, y: -9999 };
+window.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+window.addEventListener('mouseleave', () => { mouse.x = -9999; mouse.y = -9999; });
+
+// ── PARTICLES ─────────────────────────────────────────────────────────────────
+let particles = [];
+
+function initParticles() {
+  particles = [];
+  for (let i = 0; i < N; i++) {
+    particles.push(new Particle(i));
+  }
+}
+
+initParticles();
+
+// ── CONNECTION LINES ──────────────────────────────────────────────────────────
+function drawLines() {
+  const cd2 = CONNECT_D * CONNECT_D;
+
+  for (let i = 0; i < N; i++) {
+    const a = particles[i];
+    for (let j = i + 1; j < N; j++) {
+      const b   = particles[j];
+      const dx  = a.x - b.x;
+      const dy  = a.y - b.y;
+      const d2  = dx*dx + dy*dy;
+      if (d2 > cd2) continue;
+
+      const dist  = Math.sqrt(d2);
+      const fade  = 1 - dist / CONNECT_D;
+      // Line color: blend from particle a's color
+      const ca = a.c;
+      const cb = b.c;
+      // Mix the two endpoint colors at midpoint for gradient line
+      const mx = (a.x + b.x) * 0.5;
+      const my = (a.y + b.y) * 0.5;
+
+      // Boost line alpha if either endpoint is near cursor
+      const hoverA = Math.max(0, 1 - Math.sqrt((a.x-mouse.x)**2+(a.y-mouse.y)**2) / CURSOR_R);
+      const hoverB = Math.max(0, 1 - Math.sqrt((b.x-mouse.x)**2+(b.y-mouse.y)**2) / CURSOR_R);
+      const hoverBoost = Math.max(hoverA, hoverB);
+
+      const lineAlpha = fade * fade * (0.18 + hoverBoost * 0.32);
+
+      // Color the line by the "more interesting" particle (amber/electric > chrome)
+      let lc = ca;
+      if (a.col === 'amber' || b.col === 'amber') lc = COL.amber;
+      else if (a.col === 'electric' || b.col === 'electric') lc = COL.electric;
+      else if (a.col === 'white' || b.col === 'white') lc = COL.white;
+
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.strokeStyle = `rgba(${lc.r},${lc.g},${lc.b},${lineAlpha})`;
+      ctx.lineWidth   = 0.6;
+      ctx.stroke();
+    }
+  }
+}
+
+// ── BACKGROUND GLOW ───────────────────────────────────────────────────────────
+function drawBackground() {
+  ctx.fillStyle = '#050b18';
+  ctx.fillRect(0, 0, W, H);
+
+  // Subtle depth glow — slightly off-centre for visual interest
+  const g = ctx.createRadialGradient(W*0.52, H*0.44, 0, W*0.52, H*0.44, W*0.6);
+  g.addColorStop(0,   'rgba(74,144,217,0.055)');
+  g.addColorStop(0.45,'rgba(74,144,217,0.018)');
+  g.addColorStop(1,   'rgba(5,11,24,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+}
+
+// ── MAIN LOOP ─────────────────────────────────────────────────────────────────
+let startTime = null;
+let frame     = 0;
+
+function loop(ts) {
+  requestAnimationFrame(loop);
+
+  if (!startTime) startTime = ts;
+  const elapsed = (ts - startTime) / 1000; // seconds
+
+  drawBackground();
+
+  // Update all particle positions
+  particles.forEach(p => p.update(elapsed));
+
+  // Draw lines first (behind dots)
+  drawLines();
+
+  // Draw dots on top
+  particles.forEach(p => p.draw(frame));
+
+  frame++;
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
